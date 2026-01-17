@@ -1,0 +1,28 @@
+{
+  "_comment": "[ANALYSIS PROGRESS]: 100% - Dependências verificadas e alinhadas com os requisitos do sistema.",
+  "name": "habit-tracker-ai-vercel",
+  "version": "1.0.0",
+  "description": "A dynamic habit tracker with data visualization and personalized AI-powered feedback.",
+  "scripts": {
+    "dev": "node build.js",
+    "build": "NODE_ENV=production node build.js"
+  },
+  "keywords": [
+    "habit-tracker",
+    "pwa",
+    "stoicism",
+    "ai",
+    "vercel"
+  ],
+  "author": "AI-Powered Engineer",
+  "license": "ISC",
+  "dependencies": {
+    "@google/genai": "^1.33.0",
+    "@vercel/kv": "^3.0.0",
+    "@vercel/analytics": "^1.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.8",
+    "esbuild": "^0.21.4"
+  }
+}

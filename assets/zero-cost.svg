@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g transform="translate(256, 256) rotate(-45) translate(-256, -256)">
+    <!-- Blue Loop/String -->
+    <path d="M320,80 C320,35.8 284.2,0 240,0 C195.8,0 160,35.8 160,80" fill="none" stroke="#3498db" stroke-width="40" stroke-linecap="round"/>
+    
+    <!-- Tag Body Shadow/Depth (Optional for flat feel, omitted for cleaner logo style) -->
+    
+    <!-- Tag Body (Green) -->
+    <!-- Shape: Rectangular base with triangular top -->
+    <path d="M120,130 L360,130 L440,250 L440,480 L40,480 L40,250 Z" fill="#8bc34a"/>
+    
+    <!-- Tag Top Stripe (Blue Detail from reference) -->
+    <path d="M120,130 L40,250 L70,250 L135,155 Z" fill="#4a90e2" opacity="0.2"/> 
+    <!-- Simplified to just the green shape for cleaner SVG logo look, but added blue border effect on top left as seen in reference -->
+    <path d="M40,250 L120,130 L360,130" fill="none" stroke="#3498db" stroke-width="30" stroke-linecap="square" />
+
+    <!-- Hole -->
+    <circle cx="240" cy="200" r="35" fill="#ffffff"/>
+
+    <!-- Dollar Sign -->
+    <text x="240" y="410" font-family="Arial, sans-serif" font-weight="bold" font-size="220" fill="#ffffff" text-anchor="middle">$</text>
+  </g>
+</svg>

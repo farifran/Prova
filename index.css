@@ -1,0 +1,2498 @@
+
+/* 
+ * [ARCHITECTURAL CONTEXT]:
+ * @file index.css
+ * @description Estilização Global e Motor de Layout.
+ * 
+ * [MAIN THREAD CONTEXT]:
+ * O CSS é processado na thread principal, mas muitas propriedades aqui (transform, opacity) 
+ * são desenhadas na GPU (Composite Layer).
+ * 
+ * ARQUITETURA (Zero-Cost Abstractions):
+ * - Sem CSS-in-JS: Evita overhead de parsing e injeção em runtime.
+ * - Hardware Acceleration: Uso explícito de camadas para animações 60fps.
+ * - Virtualização Nativa: Uso de `content-visibility` substitui libs de virtualização JS pesadas.
+ * 
+ * DEPENDÊNCIAS CRÍTICAS:
+ * - `render/constants.ts`: As classes definidas aqui DEVEM coincidir com as constantes do TS.
+ * - `render/dom.ts`: Manipulações diretas de estilo dependem da estrutura aqui definida.
+ * 
+ * DECISÕES TÉCNICAS:
+ * 1. Layout Isolation (`contain`): Impede que mudanças em um cartão afetem o layout global (Reflow).
+ * 2. Gestos Nativos (`touch-action`): Delega a física de scroll ao navegador, permitindo interceptação JS apenas onde necessário.
+ * 3. Camadas (Z-Index): Gerenciamento estrito de contexto de empilhamento para Modais e Toasts.
+ */
+
+/* 
+ * [ANALYSIS PROGRESS]: 100% - Análise concluída.
+ * [2025-02-23]: Auditoria de CSS Completa.
+ * - Variáveis globais verificadas.
+ * - Otimizações de renderização (contain, will-change) validadas.
+ * - Responsividade e Acessibilidade (A11y) confirmadas.
+ * - Estilos de componentes sincronizados com render.ts.
+ */
+
+:root {
+    /* --- CORES --- */
+    /* FIX [2025-03-02]: Alterado para #000000 (True Black) a pedido do usuário para eliminar a percepção de 'fundo azulado' em telas OLED/LCD */
+    --bg-color: #000000;
+    --surface-color: #141414;
+    --surface-hover: #2a2a2a;
+    --surface-snoozed: var(--surface-color);
+    --border-color: var(--surface-hover);
+    /* MANUTENIBILIDADE [2024-12-07]: Este valor é lido dinamicamente pela função getContrastColor em utils.ts para garantir a consistência do tema. */
+    --text-primary: #e5e5e5;
+    --text-secondary: #b3b3b3;
+    --text-tertiary: #737373;
+    --accent-blue: #007aff;
+    --accent-blue-hover: #006be0;
+    --accent-green: #27ae60;
+    --accent-green-hover: #229954;
+    --color-red: #e74c3c;
+    --color-red-hover: #c0392b;
+    --color-yellow: #facc15;
+    --surface-light-hover: #d0d0d0;
+
+    /* --- LAYOUT E ESPAÇAMENTO --- */
+    --swipe-action-width: 60px;
+    --space-xs: 4px;
+    --space-sm: 8px;
+    --space-md: 12px;
+    --space-lg: 16px;
+    --space-section: 20px;
+    --space-xl: 24px;
+    --space-xxl: 32px;
+    --space-3xl: 48px;
+
+    /* --- BORDAS --- */
+    --border-radius-small: 6px;
+    --border-radius-base: 8px;
+    --border-radius-large: 12px;
+    --border-radius-pill: 50%;
+
+    /* --- TRANSIÇÕES --- */
+    --transition-duration: 0.2s;
+    --transition-duration-fast: 0.15s;
+    --transition-duration-slow: 0.3s;
+
+    /* --- CAMADAS (Z-INDEX) --- */
+    /* DO NOT REFACTOR: A ordem dessas camadas é crítica para evitar bugs visuais em sobreposições */
+    --z-index-base: 1;
+    --z-index-sticky: 20; /* Time markers */
+    --z-index-content: 2;
+    --z-index-indicator: 3;
+    --z-index-tooltip: 10;
+    --z-index-header: 50; /* Header above scrolling content */
+    --z-index-footer: 50; /* Chart footer above scrolling content */
+    --z-index-modal-overlay: 1000;
+    --z-index-modal-content: 1001;
+    --z-index-stacked-modal: 1010; /* Para modais que aparecem sobre outros modais */
+    --z-index-toast: 2000;
+}
+
+/* --- ANIMAÇÕES GLOBAIS --- */
+/* PERFORMANCE: Animações baseadas em transform/opacity rodam na thread do compositor (GPU), liberando a Main Thread. */
+@keyframes glow-pulse {
+    0%, 100% { opacity: 0.4; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.15); }
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+@keyframes flash-green {
+    from {
+      color: var(--accent-green);
+      text-shadow: 0 0 8px var(--accent-green);
+    }
+    to {
+      color: var(--text-primary);
+      text-shadow: none;
+    }
+}
+  
+@keyframes flash-red {
+    from {
+      color: var(--color-red);
+      text-shadow: 0 0 8px var(--color-red);
+    }
+    to {
+      color: var(--text-primary);
+      text-shadow: none;
+    }
+}
+
+/* UX [2025-01-18]: Animação de 'Pop' para feedback de conclusão */
+@keyframes icon-pop {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.3); }
+    100% { transform: scale(1); }
+}
+
+/* UX [2025-01-18]: Animação de 'Shake' para feedback de erro */
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+}
+
+.shake {
+    animation: shake 0.3s ease-in-out;
+    border-color: var(--color-red) !important;
+}
+
+/* A11Y & PERFORMANCE: Respeita a preferência do usuário por movimento reduzido. */
+/* CRITICAL LOGIC: Evita desconforto vestibular e economiza bateria em dispositivos configurados para isso. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+
+/* --- RESET E ESTILOS GLOBAIS --- */
+html {
+    height: 100%;
+    overflow: hidden; /* Lock body scroll */
+    overscroll-behavior: none; /* Prevent bounce on body */
+    /* FIX [2025-03-02]: Define a cor de fundo na raiz para cobrir áreas de 'overscroll' e a barra inferior do mobile */
+    background-color: var(--bg-color);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    /* UX FIX: Remove o flash azul de toque em dispositivos móveis (Android/iOS) para sensação nativa */
+    -webkit-tap-highlight-color: transparent;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg-color);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* UX: Desativa seleção de texto globalmente para sensação de App Nativo. Habilitado seletivamente onde necessário. */
+    -webkit-user-select: none; /* Safari */
+    user-select: none;         /* Padrão Moderno */
+    touch-action: manipulation; /* BUGFIX [2024-08-29]: Desabilita o zoom por duplo toque em dispositivos móveis para melhorar a resposta de interações personalizadas. */
+    overscroll-behavior-y: none; /* Previne o efeito rubber-banding/pull-to-refresh nativo */
+    /* UX: Evita scroll chaining */
+    overscroll-behavior: contain;
+    
+    /* MODERN LAYOUT [2025-01-18]: Garante altura total em mobile ignorando a barra de endereços */
+    height: 100%;
+    height: 100dvh;
+    overflow: hidden; /* Double lock */
+    
+    /* UX: Previne o ajuste automático de texto em rotação no iOS */
+    -webkit-text-size-adjust: 100%;
+}
+
+/* Permitir seleção em campos de texto e conteúdo onde é útil */
+:is(input, textarea),
+#ai-response,
+#stoic-quote-display,
+#sync-key-text,
+#confirm-modal-text {
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+
+/* MELHORIA A11Y: Estado de foco visível e consistente com cor adaptável ao tema. */
+:is(button, a, input, [tabindex]):focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-blue) 30%, transparent);
+}
+
+/* UTILITÁRIO A11Y [2025-01-18]: Esconde visualmente mas mantém acessível para leitores de tela e teclado */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* UTILITÁRIO GERAL: Esconde elementos completamente */
+.hidden {
+    display: none !important;
+}
+
+
+/* --- LAYOUT BASE (APP SHELL) --- */
+.app-container {
+    max-width: 800px;
+    margin-inline: auto;
+    
+    /* FIX: APP SHELL LAYOUT */
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+main {
+    display: flex;
+    flex-direction: column;
+    flex: 1; /* Occupy remaining space */
+    min-height: 0; /* Critical for nested scrolling */
+    
+    /* LAYOUT LOCK: Main does not scroll globally */
+    overflow: hidden;
+    position: relative;
+}
+
+/* --- CABEÇALHO (FIXED TOP) --- */
+.app-header {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    padding-block-start: var(--space-section);
+    
+    /* PADDING UPDATE [2025-02-26]: Increased from 0 to --space-md to separate quote from habits */
+    padding-block-end: var(--space-md);
+    
+    padding-inline: var(--space-lg); /* Restore horizontal padding */
+    flex-shrink: 0; /* Prevent shrinking */
+    
+    /* LAYOUT LOCKING */
+    z-index: var(--z-index-header);
+    background-color: var(--bg-color); /* Ensure opacity */
+    
+    /* VISUAL UPDATE [2025-02-26]: Removed shadow to blend seamlessly with app background */
+    box-shadow: none;
+}
+
+.header-top {
+    display: flex;
+    align-items: center;
+    gap: var(--space-lg);
+}
+
+.header-icon-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-xs);
+    flex-shrink: 0;
+}
+/* MELHORIA DE MANUTENIBILIDADE [2024-10-29]: Unifica o tamanho dos botões de ícone. A regra específica para #ai-eval-btn foi removida por ser redundante. */
+.header-icon-stack .icon-btn {
+    width: 38px;
+    height: 38px;
+    font-size: 20px;
+}
+.header-icon-stack #ai-eval-btn svg {
+    width: 22px;
+    height: 22px;
+}
+
+.header-bottom {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xl);
+    justify-content: space-between;
+    margin-block-start: var(--space-md);
+}
+
+.app-header h2 {
+    font-size: 28px;
+    font-weight: 700;
+    position: relative;
+    top: -5px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    /* UX: Indica interatividade (retornar para Hoje) */
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.header-title-mobile {
+    display: none;
+}
+
+.stoic-quote {
+    font-size: 13px;
+    font-style: italic;
+    color: var(--text-secondary);
+    min-height: 2.2em;
+    line-height: 1.4;
+    transition: opacity 0.5s ease-in-out, color var(--transition-duration);
+    opacity: 0;
+    text-align: left;
+    margin-block-start: 0;
+    /* UX: Indica interatividade (clique para copiar) */
+    cursor: pointer;
+}
+.stoic-quote.visible {
+    opacity: 1;
+}
+.stoic-quote:active {
+    opacity: 0.7;
+}
+
+/* --- COMPONENTES: BOTÕES --- */
+.btn {
+    padding: var(--space-sm) var(--space-lg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-base);
+    background: var(--surface-color);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color var(--transition-duration), border-color var(--transition-duration);
+    -webkit-tap-highlight-color: transparent; /* Remove o flash de toque no mobile */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+.btn:hover { background: var(--border-color); }
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background-color: var(--surface-snoozed);
+}
+
+.btn--danger {
+    background-color: var(--color-red);
+    border-color: var(--color-red);
+    color: white;
+}
+.btn--danger:hover {
+    background-color: var(--color-red-hover);
+    border-color: var(--color-red-hover);
+}
+.btn--primary {
+    background-color: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: white;
+}
+.btn--primary:hover {
+    background-color: var(--accent-blue-hover);
+    border-color: var(--accent-blue-hover);
+}
+
+.icon-btn {
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-size: 24px;
+    cursor: pointer;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    position: relative;
+}
+
+/* OTIMIZAÇÃO: Animação de brilho performática usando opacity em pseudo-elemento. */
+#ai-eval-btn.has-notification::after {
+    content: '';
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 10px;
+    height: 10px;
+    background-color: var(--accent-blue);
+    border: 2px solid var(--bg-color);
+    border-radius: var(--border-radius-pill);
+    box-shadow: 0 0 8px var(--accent-blue);
+    animation: glow-pulse 2s infinite ease-in-out;
+}
+#ai-eval-btn.loading {
+    opacity: 0.6;
+    cursor: wait;
+}
+#ai-eval-btn .loading-icon { display: none; }
+#ai-eval-btn .offline-icon { display: none; }
+#ai-eval-btn.loading .loading-icon {
+    display: block;
+    animation: spin 1s linear infinite;
+}
+#ai-eval-btn.loading .default-icon { display: none; }
+
+#fab-add-habit {
+    position: relative;
+    width: calc(var(--space-section) * 2);
+    height: calc(var(--space-section) * 2);
+    font-size: 24px;
+    font-weight: 300;
+    line-height: 1;
+    border-radius: var(--border-radius-pill);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    background-color: var(--accent-green);
+    color: white;
+    border: none;
+    box-shadow: 0 0 5px var(--accent-green);
+    transition: background-color var(--transition-duration), transform var(--transition-duration);
+}
+#fab-add-habit:hover {
+    background-color: var(--accent-green-hover);
+    transform: scale(1.1);
+}
+/* OTIMIZAÇÃO: Animação de brilho performática em pseudo-elemento. */
+#fab-add-habit::after {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: var(--border-radius-pill);
+    background-color: transparent;
+    box-shadow: 0 0 12px var(--accent-green);
+    opacity: 0;
+    animation: glow-pulse 2.5s infinite ease-in-out;
+    pointer-events: none;
+}
+
+/* --- COMPONENTES: SELETOR DE CARROSSEL (REEL ROTARY) --- */
+.reel-rotary {
+    display: flex;
+    align-items: center;
+    background-color: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-base);
+    overflow: hidden;
+    height: 28px;
+}
+
+.reel-viewport {
+    height: 100%;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    align-items: center;
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+    width: var(--reel-item-width);
+}
+.reel-viewport:active { cursor: grabbing; }
+
+.reel-reel {
+    display: flex;
+    position: absolute;
+    height: 100%;
+    transition: transform var(--transition-duration-slow) cubic-bezier(0.25, 1, 0.5, 1);
+    /* PERFORMANCE [2025-01-16]: Hint para o navegador otimizar a animação de transform. */
+    will-change: transform;
+}
+
+.reel-option {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    width: var(--reel-item-width);
+}
+
+.reel-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: var(--space-xs);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color var(--transition-duration);
+}
+.reel-btn:hover { background-color: var(--surface-hover); }
+.reel-btn svg {
+    stroke: var(--text-tertiary);
+    width: 16px;
+    height: 16px;
+}
+
+/* REATORAÇÃO: Centraliza a definição de largura usando variáveis locais. */
+#language-rotary { --reel-item-width: 95px; }
+
+/* --- COMPONENTES: CALENDÁRIO --- */
+.calendar-strip {
+    display: flex;
+    gap: var(--space-sm);
+    overflow-x: auto;
+    scrollbar-width: none;
+    flex: 1;
+    min-width: 0;
+    position: relative;
+    user-select: none;
+    /* PERFORMANCE [2024-12-28]: Isola o layout e a pintura da faixa de calendário para evitar reflows globais. */
+    contain: content;
+    /* UX: Evita scroll chaining */
+    overscroll-behavior: contain;
+    
+    /* UX [2025-01-18]: Rolagem com snap para sensação mais precisa */
+    scroll-snap-type: x proximity;
+    
+    /* FIX [2025-01-18]: Ajuste de padding para evitar corte do último item próximo aos ícones */
+    padding-inline-start: 4px;
+    padding-inline-end: var(--space-xl);
+}
+.calendar-strip::-webkit-scrollbar { display: none; }
+
+.day-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-md) var(--space-sm);
+    border-radius: var(--border-radius-large);
+    cursor: pointer;
+    transition: background-color var(--transition-duration), transform 0.1s ease-out;
+    border: 2px solid transparent;
+    flex-shrink: 0; /* CORREÇÃO DE LAYOUT [2024-12-14]: Impede que os dias do calendário encolham em telas pequenas, garantindo que a faixa de rolagem funcione corretamente. */
+    
+    /* UX [2025-02-05]: Alinhamento 'end' para coincidir com o scrollIntoView('end') e manter o histórico visível */
+    scroll-snap-align: end;
+}
+.day-item:hover { background-color: var(--surface-hover); }
+.day-item.selected { 
+    background-color: var(--surface-color);
+}
+
+/* UX: Feedback tátil para "Long Press" no calendário */
+.day-item.is-pressing {
+    transform: scale(0.95);
+    background-color: var(--surface-hover);
+}
+
+.day-item .day-name {
+    display: block;
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-weight: 500;
+    /* MEMORY OPTIMIZATION [2025-01-29]: Removed transform: translateZ(0) to reduce compositor layer count in large lists. 'contain: content' on parent handles performance. */
+}
+
+.day-progress-ring {
+    position: relative;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--border-radius-pill);
+}
+/* TÉCNICA: Anel de Progresso com Gradiente Cônico e Máscara */
+.day-progress-ring::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: var(--border-radius-pill);
+    padding: 2px;
+    background: conic-gradient(
+        from -90deg,
+        var(--accent-blue) 0% var(--completed-percent, 0%),
+        #ffffff var(--completed-percent, 0%) calc(var(--completed-percent, 0%) + var(--snoozed-percent, 0%)),
+        transparent calc(var(--completed-percent, 0%) + var(--snoozed-percent, 0%)) 100%
+    );
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+}
+
+.day-item .day-number {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--border-radius-pill);
+    z-index: var(--z-index-content);
+    position: relative;
+}
+/* OTIMIZAÇÃO: Animação de brilho no pseudo-elemento. */
+.day-item.today .day-number {
+    background-color: var(--accent-green);
+    color: white;
+}
+.day-item.today .day-number::after {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: var(--border-radius-pill);
+    box-shadow: 0 0 12px var(--accent-green);
+    animation: glow-pulse 2.5s infinite ease-in-out;
+}
+.day-item .day-number.has-plus {
+    text-shadow: 0 0 3px var(--text-primary), 0 0 5px var(--text-primary);
+}
+
+
+/* --- LAYOUT DE HABIT CONTAINER (SMART FLEX SCROLL) --- */
+#habit-container {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    
+    /* SMART LAYOUT: 
+       flex-grow: 0 (Não ocupa espaço vazio desnecessário, deixando o gráfico subir)
+       flex-shrink: 1 (Encolhe se faltar espaço, ativando o scroll)
+       flex-basis: auto (Tamanho baseado no conteúdo)
+    */
+    flex: 0 1 auto;
+    
+    /* SCROLL INTERNO: Ativa apenas quando o conteúdo excede o espaço disponível */
+    overflow-y: auto; 
+    overflow-x: hidden;
+    min-height: 0; /* Important for flex child scroll */
+    
+    /* UX: Padding para o conteúdo não colar nas bordas */
+    padding-inline: var(--space-lg);
+    padding-top: var(--space-lg); /* Space between header and habits, matches chart margin. */
+    
+    /* UX: Respiro interno no final da rolagem */
+    padding-bottom: var(--space-xl);
+    
+    /* UX: Smooth scrolling */
+    scroll-behavior: smooth;
+    
+    /* FIX [2025-03-02]: Alterado de 'contain' para 'none' para remover o efeito de 'overscroll glow' (onda azul) em Androids, que causa a impressão de bug visual no final da lista. */
+    overscroll-behavior-y: none;
+
+    /* HIDE SCROLLBAR (Firefox) */
+    scrollbar-width: none;
+}
+
+/* PERFORMANCE FIX [2025-03-04]: Desativa scroll suave durante arrasto para evitar conflito com a física JS */
+#habit-container.is-dragging {
+    scroll-behavior: auto !important;
+}
+
+/* HIDE SCROLLBAR (Chrome, Safari, Edge) */
+#habit-container::-webkit-scrollbar {
+    display: none;
+}
+
+/* --- COMPONENTES: GRUPO DE HÁBITOS (WRAPPER) --- */
+.habit-group-wrapper {
+    margin-block-end: 0;
+    transition: margin-block-start var(--transition-duration-slow) ease-in-out;
+    
+    /* UI UPDATE: Layout Flex para Timeline */
+    display: flex;
+    align-items: flex-start; /* [2025-02-26]: Mantém Top Alignment para Sticky */
+    gap: var(--space-md);
+    
+    /* SINGLE SCROLL FIX: Remove scroll limits from wrappers */
+    flex: 0 0 auto; /* Grow with content, do not shrink */
+    min-height: auto;
+    overflow: visible;
+
+    /* OTIMIZAÇÃO [2025-03-09]: Content Visibility.
+       Permite que o navegador pule a renderização de grupos fora da tela (ex: Noite quando vendo Manhã).
+       Isso reduz o tempo de paint em telas pequenas com listas longas. */
+    content-visibility: auto;
+    contain-intrinsic-size: 100px; /* Altura estimada de um grupo vazio/pequeno para evitar saltos de scroll */
+}
+
+/* Collapsible state override */
+.habit-group-wrapper.is-collapsible {
+    display: none; /* Completely hide empty groups to save scroll space */
+}
+
+/* Time Marker (Left Timeline Column - STICKY) */
+.time-marker {
+    flex-shrink: 0;
+    width: 30px;
+    padding-top: 25px; /* [2025-02-26]: Ajuste fino para alinhar visualmente à base do cartão */
+    padding-bottom: 2px;
+    color: #ffffff; /* Changed from var(--text-tertiary) */
+    display: flex;
+    justify-content: center;
+    
+    /* STICKY BEHAVIOR within the Unified Scroll */
+    position: sticky;
+    top: 10px; /* [2025-02-26]: Define limite de fixação no topo, permitindo rolagem inicial natural */
+    z-index: var(--z-index-sticky); /* Ensure it stays above content */
+    
+    transition: opacity var(--transition-duration);
+    
+    /* UX FIX [2025-02-25]: Disable pointer events so dragging over the icon hits the drop zone behind it */
+    pointer-events: none;
+}
+.time-marker svg {
+    /* Reduced size from 24px to 21px (~10%) */
+    width: 21px;
+    height: 21px;
+}
+
+/* SCROLLBAR CUSTOMIZADA (REMOVIDA) */
+
+
+/* ROBUSTEZ [2025-01-28]: Desativa content-visibility durante drag-and-drop. */
+body.is-dragging-active .habit-group-wrapper {
+    content-visibility: visible;
+    contain-intrinsic-size: auto;
+}
+/* Allow wrapper to grow to show drop zones */
+body.is-dragging-active .habit-group-wrapper.is-collapsible {
+    display: flex;
+    min-height: 100px;
+    margin-block-start: var(--space-md);
+}
+
+.habit-group-wrapper + .habit-group-wrapper {
+    margin-block-start: 0;
+}
+
+.habit-group {
+    position: relative; /* Necessário para o posicionamento do indicador de soltar */
+    padding: 0;
+    margin: 0;
+    list-style: none;
+    border-radius: var(--border-radius-large);
+    border: 2px dashed transparent;
+    transition: background-color var(--transition-duration), border-color var(--transition-duration);
+    min-height: 40px;
+    
+    /* Flex child props */
+    flex-grow: 1;
+    min-width: 0; /* Important for flex children to shrink properly */
+
+    /* SINGLE SCROLL FIX: Remove internal scroll */
+    height: auto; 
+    overflow: visible;
+    
+    /* FIX [2025-02-25]: Ensure z-index is higher than time-marker to catch pointer events */
+    z-index: var(--z-index-content); 
+}
+
+/* Quando arrastando, relaxamos o containment e a altura para permitir fluidez */
+body.is-dragging-active .habit-group {
+    contain: style;
+}
+
+.habit-group.drag-over {
+    background-color: var(--surface-hover);
+    border-color: var(--accent-blue);
+}
+.habit-group.invalid-drop {
+    border-color: var(--color-red);
+}
+
+.drop-indicator {
+    position: absolute;
+    height: 3px;
+    background-color: var(--accent-blue);
+    border-radius: 2px;
+    left: var(--space-sm);
+    right: var(--space-sm);
+    opacity: 0;
+    pointer-events: none;
+    transition: top var(--transition-duration-fast) ease-out, opacity var(--transition-duration-fast) ease-out;
+    z-index: var(--z-index-indicator);
+    /* PERFORMANCE [2025-01-16]: Otimiza animação de drag & drop. */
+    will-change: top, opacity;
+}
+.drop-indicator.visible {
+    opacity: 1;
+}
+
+.empty-group-placeholder {
+    padding: var(--space-md); /* Reduced from --space-lg (16px) to --space-md (12px) */
+    color: var(--text-tertiary);
+    font-style: normal;
+    font-weight: 500;
+    font-size: 14px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-sm);
+    transition: opacity var(--transition-duration);
+    
+    /* UX [2025-01-18]: Placeholder agora é um botão de ação interativo com visual de slot */
+    cursor: pointer;
+    border: 2px dashed var(--border-color);
+    border-radius: var(--border-radius-large);
+    background-color: transparent;
+    margin-block-end: var(--space-sm);
+    transition: color var(--transition-duration), transform var(--transition-duration), border-color var(--transition-duration), background-color var(--transition-duration);
+    
+    /* UI FIX: Expand to full width */
+    width: 100%;
+}
+.empty-group-placeholder:hover {
+    color: var(--text-primary);
+    border-color: var(--accent-blue);
+    background-color: var(--surface-hover);
+}
+.empty-group-placeholder:active {
+    transform: scale(0.98);
+    background-color: var(--surface-color);
+}
+
+/* FIX [2025-02-25]: Disable pointer events on children to ensure dragover hits the container or main placeholder */
+.empty-group-placeholder * {
+    pointer-events: none;
+}
+
+.habit-group-wrapper:not(.has-habits) .empty-group-placeholder.show-smart-placeholder,
+body.is-dragging-active .habit-group-wrapper:not(.has-habits) .empty-group-placeholder {
+    display: flex;
+}
+.habit-group-wrapper.has-habits .empty-group-placeholder {
+    display: none;
+    padding: 0;
+    pointer-events: none;
+}
+.placeholder-icon-generic, .placeholder-icon-specific { display: flex; align-items: center; gap: var(--space-xs); }
+.placeholder-icon-generic .icon-separator { margin-inline: var(--space-xs); opacity: 0.5; }
+.placeholder-icon-generic { display: none; }
+.placeholder-icon-specific { display: flex; }
+body:not(.is-dragging-active) .empty-group-placeholder.show-smart-placeholder .placeholder-icon-generic { display: flex; }
+body:not(.is-dragging-active) .empty-group-placeholder.show-smart-placeholder .placeholder-icon-specific { display: none; }
+
+/* --- COMPONENTES: CARTÃO DE HÁBITO --- */
+.habit-card {
+    border-radius: var(--border-radius-large);
+    margin-block-end: var(--space-sm);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    /* PERFORMANCE [2024-12-28]: Isola o layout e estilo para otimizar renderização de listas longas. */
+    contain: layout style;
+    /* UX [2025-01-27]: Importante para garantir scroll vertical suave ao tocar no cartão */
+    /* LOGIC LOCK: 'pan-y' é essencial para a física do swipe horizontal personalizada. */
+    touch-action: pan-y;
+}
+.habit-group .habit-card:last-child { margin-block-end: 0; }
+
+.habit-card::before { /* Indicador de status (barra vertical) */
+    content: '';
+    position: absolute;
+    inset-block: var(--space-sm);
+    width: var(--space-xs);
+    border-radius: 2px;
+    z-index: var(--z-index-indicator);
+    background-color: transparent;
+    transition: transform var(--transition-duration-slow) ease, background-color var(--transition-duration-slow) ease;
+    transform: scaleX(0);
+}
+.habit-card.snoozed::before {
+    /* VISUAL UPDATE [2025-02-26]: Aumentado de space-xs (4px) para space-md (12px) para desgrudar da borda */
+    inset-inline-start: var(--space-md);
+    background-color: var(--text-tertiary);
+    transform: scaleX(1);
+    transform-origin: left;
+}
+.habit-card.completed::before {
+    /* VISUAL UPDATE [2025-02-26]: Aumentado de space-xs (4px) para space-md (12px) para desgrudar da borda */
+    inset-inline-end: var(--space-md);
+    background-color: var(--accent-blue);
+    transform: scaleX(1);
+    transform-origin: right;
+}
+.habit-card.is-swiping::before,
+.habit-card.is-open-left::before,
+.habit-card.is-open-right::before {
+    transform: scaleX(0);
+    transition: transform var(--transition-duration-fast) ease-out;
+}
+
+.habit-card::after { /* Borda externa */
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: var(--border-radius-large);
+    /* 3D EFFECT: Borda sutil para dar profundidade */
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    pointer-events: none;
+    z-index: var(--z-index-indicator);
+    transition: border-color var(--transition-duration);
+}
+.habit-card.completed::after,
+.habit-card.snoozed::after { border-color: transparent; }
+.habit-card.semi-consolidated::after { border-color: rgba(255, 255, 255, 0.8); }
+.habit-card.consolidated::after { border-color: var(--accent-green); }
+
+.habit-content-wrapper {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md); /* Changed from sm (8px) to md (12px) for spacing */
+    /* VISUAL UPDATE [2025-02-26]: Ajuste de padding para 32px (space-xxl) para triplicar a margem visual durante o swipe (de 6px para 18px).
+       Math: 32px (pad) + 34px (icon) + 12px (gap) = 78px. 
+       Swipe Width: 60px. Buffer: 18px. */
+    padding: var(--space-sm) var(--space-md) var(--space-sm) var(--space-xxl);
+    position: relative;
+    z-index: var(--z-index-content);
+    cursor: pointer;
+    transition: transform var(--transition-duration-slow) cubic-bezier(0.23, 1, 0.32, 1), background var(--transition-duration), padding-right var(--transition-duration);
+    border-radius: 9px;
+    flex-grow: 1;
+    touch-action: pan-y;
+    /* MEMORY OPTIMIZATION [2025-01-29]: Removed global will-change: transform. Apply it contextually during interactions (swipe/drag) via classes to save VRAM. */
+}
+/* Only use will-change during interaction to save memory */
+.habit-card.is-swiping .habit-content-wrapper,
+.habit-card.dragging .habit-content-wrapper {
+    will-change: transform;
+}
+
+.habit-card:not(.completed):not(.snoozed) .habit-content-wrapper {
+    /* 3D EFFECT: Gradiente sutil para simular luz de cima e dar perspectiva */
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 60%), var(--bg-color);
+}
+
+.habit-card.completed .habit-content-wrapper { 
+    background: color-mix(in srgb, var(--accent-blue) 20%, var(--bg-color));
+    /* BUGFIX [2025-02-26]: Removed opacity to prevent transparency issues when dragging or overlaying content */
+    opacity: 1 !important;
+}
+.habit-card.snoozed .habit-content-wrapper {
+    background: var(--surface-snoozed);
+}
+
+.habit-card.completed .habit-content-wrapper,
+.habit-card.snoozed .habit-content-wrapper {
+    padding-right: var(--space-xl);
+}
+
+.habit-card.dragging { opacity: 0.4; }
+.habit-card.is-swiping .habit-content-wrapper {
+    transition: none; /* Desativa transição durante o deslize manual */
+    user-select: none;
+}
+
+/* STYLE [2024-08-09]: Estiliza a imagem de arrasto personalizada. */
+.drag-image-ghost {
+    position: absolute;
+    top: -9999px; /* Posiciona fora da tela para não afetar o layout */
+    left: -9999px;
+    background-color: var(--surface-hover);
+    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+    border-radius: 9px;
+    /* DO NOT REFACTOR: Garante que a imagem fantasma não intercepte eventos do mouse */
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.95;
+    transform: scale(1.02); /* Leve aumento para "levantar" da página */
+}
+
+.consolidation-message {
+    font-size: 10px;
+    font-weight: 500;
+    margin-block-start: var(--space-xs);
+    color: var(--text-secondary);
+}
+.consolidated .consolidation-message { color: var(--accent-green); }
+
+.time-of-day-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    min-width: 18px;
+    height: 18px;
+    color: var(--text-tertiary);
+    gap: var(--space-xs);
+    transition: opacity var(--transition-duration-slow);
+}
+.time-of-day-icon svg {
+    width: 18px;
+    height: 100%;
+    stroke: currentColor;
+}
+
+.habit-icon {
+    font-size: 14px;
+    width: 34px;
+    height: 34px;
+    /* FIX [2025-03-02]: Garante que o ícone nunca encolha, mesmo com textos longos */
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--border-radius-small);
+    transition: opacity var(--transition-duration-slow);
+}
+.habit-icon svg { width: 60%; height: 60%; }
+
+/* UX [2025-01-18]: Classe de animação para o ícone ao completar o hábito */
+.habit-icon.animate-pop {
+    animation: icon-pop 0.3s ease-out;
+}
+
+.habit-details { 
+    text-align: left;
+    flex-grow: 1; /* Faz com que o título ocupe o espaço disponível, empurrando a meta para a direita */
+    min-width: 0; /* Permite truncagem de texto se necessário */
+}
+.habit-details .name {
+    /* Reduced from 18px to ~16px (10% reduction) */
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    transition: color var(--transition-duration-slow), text-decoration-color var(--transition-duration-slow);
+    
+    /* ROBUSTEZ [2025-02-28]: Uso de Line Clamping em vez de JS para truncar nomes longos. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    white-space: normal;
+    line-height: 1.2;
+}
+.habit-details .subtitle { 
+    font-size: 11px; 
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.habit-card.completed .habit-details .name {
+    color: var(--text-secondary);
+    text-decoration: line-through;
+    text-decoration-color: var(--accent-blue);
+    text-decoration-thickness: 2px;
+}
+
+.habit-goal {
+    text-align: right;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-height: 26px;
+    margin-left: auto; /* Garante o alinhamento à direita */
+    flex-shrink: 0; /* Impede que os controles encolham */
+}
+.habit-goal .progress { font-size: 11px; font-weight: 600; }
+.habit-goal .unit { font-size: 8px; color: var(--text-secondary); }
+
+.habit-goal-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    transition: opacity var(--transition-duration);
+}
+.goal-control-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-size: 22px;
+    font-weight: 500;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--border-radius-pill);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    padding: 0;
+    flex-shrink: 0;
+    transition: opacity 0.2s, background-color 0.2s;
+}
+.goal-control-btn:hover { background-color: var(--surface-hover); }
+.goal-control-btn:active { transform: scale(0.95); }
+.goal-control-btn:disabled { opacity: 0.3; cursor: default; background-color: transparent; }
+
+.goal-value-wrapper {
+    text-align: center;
+    min-width: 23px;
+    cursor: pointer;
+    padding: var(--space-xs);
+    border-radius: var(--space-xs);
+    transition: background-color var(--transition-duration);
+}
+.goal-value-wrapper:hover { background-color: var(--surface-hover); }
+
+.goal-input-inline {
+    width: calc(var(--space-section) * 2.5); /* Widen for 3 digits comfort */
+    background: transparent; /* UX FIX: Blend with card background */
+    border: 1px solid var(--accent-blue);
+    color: var(--text-primary);
+    font-size: 14px;
+    text-align: center;
+    border-radius: var(--space-xs);
+    padding: 2px;
+    -moz-appearance: textfield;
+}
+.goal-input-inline::-webkit-outer-spin-button,
+.goal-input-inline::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.goal-value-wrapper .progress {
+    color: var(--text-primary);
+    transition: color var(--transition-duration-slow);
+}
+
+.goal-value-wrapper.increase .progress {
+    animation: flash-green 0.7s ease-out;
+}
+  
+.goal-value-wrapper.decrease .progress {
+    animation: flash-red 0.7s ease-out;
+}
+
+/* --- COMPONENTES: AÇÕES DE DESLIZE --- */
+.habit-actions-left, .habit-actions-right {
+    position: absolute;
+    inset-block: 0;
+    z-index: var(--z-index-base);
+    display: flex;
+    align-items: center;
+    width: 200px; /* Largura grande para permitir um over-swipe */
+    
+    /* A11Y [2025-01-18]: Esconde do foco e leitura quando não ativos */
+    visibility: hidden;
+    transition: visibility 0s linear 0.2s; /* Atrasa o hide para permitir animação de slide */
+}
+/* UX [2025-02-05]: Mudança para cinza para indicar ação destrutiva/reset menos agressiva */
+.habit-actions-left { inset-inline-start: 0; background-color: var(--text-tertiary); }
+.habit-actions-right { inset-inline-end: 0; background-color: var(--accent-blue); justify-content: flex-end; }
+
+.habit-card.is-open-left .habit-content-wrapper { transform: translateX(var(--swipe-action-width)); }
+.habit-card.is-open-right .habit-content-wrapper { transform: translateX(calc(-1 * var(--swipe-action-width))); }
+.habit-card:is(.is-open-left, .is-open-right) :is(.habit-goal-controls, .time-of-day-icon, .habit-icon) {
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* A11Y [2025-01-18]: Torna visível quando aberto ou sendo arrastado */
+.habit-card.is-open-left .habit-actions-left,
+.habit-card.is-open-right .habit-actions-right,
+.habit-card.is-swiping .habit-actions-left,
+.habit-card.is-swiping .habit-actions-right {
+    visibility: visible;
+    transition-delay: 0s;
+}
+
+/* REATORAÇÃO DE ARQUITETURA [2024-09-22]: A técnica de mask-image foi substituída por SVGs embutidos. */
+/* Os ícones agora são coloridos via a propriedade 'color' do CSS para maior manutenibilidade. */
+.swipe-delete-btn, .swipe-note-btn {
+    border: none;
+    height: 100%;
+    width: var(--swipe-action-width);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: transparent;
+    color: white;
+    transition: color var(--transition-duration);
+    padding: 0;
+}
+.swipe-delete-btn:hover, .swipe-note-btn:hover {
+    color: var(--surface-light-hover);
+}
+.swipe-delete-btn svg, .swipe-note-btn svg {
+    width: 24px;
+    height: 24px;
+}
+
+/* REFINAMENTO VISUAL [2025-01-16]: Estilos do wrapper de status 'Adiado' para corrigir sobreposição e alinhar com o ícone. */
+.snoozed-wrapper, .completed-wrapper {
+    display: flex;
+    align-items: center;
+    padding: 4px;
+    border-radius: var(--border-radius-small);
+    /* UX UPDATE [2025-02-27]: Square ratio for clean icon display */
+    aspect-ratio: 1/1;
+    justify-content: center;
+}
+
+.snoozed-wrapper {
+    background-color: rgba(0, 0, 0, 0.2); /* Contraste sutil sobre o fundo snoozed */
+}
+
+/* VISUAL UPDATE [2025-02-26]: Wrapper para estado concluído combinando com estilo de adiado */
+.completed-wrapper {
+    background-color: rgba(0, 122, 255, 0.15); /* Contraste sutil sobre o fundo completed */
+}
+
+/* Generic SVG styling for snoozed/checked icon inside wrapper */
+.snoozed-wrapper svg,
+.completed-wrapper svg {
+    width: 20px;
+    height: 20px;
+    display: block;
+}
+
+.snoozed-wrapper svg {
+    stroke: var(--text-tertiary);
+}
+
+.completed-wrapper svg {
+    stroke: var(--accent-blue);
+}
+
+/* --- COMPONENTES: GRÁFICO DE EVOLUÇÃO (AUTO FOOTER) --- */
+.chart-container {
+    padding: var(--space-lg);
+    background-color: var(--bg-color); /* TESTE: Alterado para preto puro a pedido do usuário */
+    border-radius: var(--border-radius-large);
+    /* PERFORMANCE [2024-12-28]: Isola o layout e a pintura da faixa de calendário para evitar reflows globais. */
+    /* FIX [2024-12-28]: Alterado para 'layout style' para permitir que tooltips overflow (visualmente). */
+    contain: layout style;
+    /* PERFORMANCE [2025-01-18]: Otimização para evitar renderização quando fora da tela. */
+    content-visibility: auto;
+    contain-intrinsic-size: 80px;
+    
+    /* FIX: FLEX ITEM */
+    flex-shrink: 0; /* Nunca encolhe, sempre visível */
+    max-height: none;
+    overflow: visible;
+    
+    /* UI FIX: Margem superior para separar dos cartões.
+       Como o container de hábitos não força altura total, o gráfico sobe
+       naturalmente para ficar perto dos cartões quando há poucos. */
+    /* Reduced margin-top from --space-3xl (48px) to --space-xl (24px) for tighter layout */
+    margin-top: var(--space-lg);
+    margin-inline: var(--space-lg); 
+    
+    /* Margem inferior para não colar na borda da tela */
+    /* Reduced margin-bottom from --space-lg (16px) to --space-sm (8px) */
+    margin-bottom: var(--space-sm);
+    
+    /* Estilos visuais normais (não flutuante) */
+    z-index: var(--z-index-footer);
+    box-shadow: none;
+    
+    /* [2025-02-23] Add border matching habit cards */
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    
+    /* VISUAL UPDATE [2025-03-22]: Make container relative for layering. */
+    position: relative;
+}
+.chart-header {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    /* VISUAL UPDATE [2025-03-22]: Margin removed to align chart top with title */
+    margin-bottom: 0;
+    /* VISUAL UPDATE [2025-03-22]: Ensure text is above chart line */
+    position: relative;
+    z-index: 5;
+    /* UX: Disable pointer events on header so user can scrub chart underneath */
+    pointer-events: none;
+}
+/* REFINAMENTO DE UI [2024-11-25]: Estilos atualizados para acomodar um novo cabeçalho de gráfico com título e subtítulo. */
+.chart-title {
+    /* RESTAURADO: Título 'Askesis' */
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+.app-subtitle {
+    font-size: 13px;
+    font-style: italic;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-xs);
+    line-height: 1.4;
+}
+.chart-title strong {
+    color: var(--accent-green);
+}
+.chart-data-view, .chart-empty-state {
+    display: none;
+}
+.chart-container:not(.is-empty) .chart-data-view {
+    display: block;
+    /* VISUAL UPDATE [2025-03-22]: Negative margin to pull chart up behind the title text */
+    margin-top: -30px;
+    position: relative;
+}
+.chart-container.is-empty .chart-empty-state {
+    display: flex;
+}
+.chart-wrapper { 
+    position: relative; 
+    /* VISUAL UPDATE [2025-03-22]: Reduced height by 5px */
+    height: 80px; 
+    /* UX [2025-01-24]: Permite scroll vertical (pan-y) mas captura horizontal */
+    touch-action: pan-y; 
+    user-select: none; 
+}
+.chart-svg { 
+    width: 100%; 
+    height: 100%;
+    /* FIX [2025-03-22]: Permite que o stroke ultrapasse levemente a área de visualização (para não cortar a ponta da linha ou sombras) */
+    overflow: visible;
+    /* FIX [2025-03-25]: Z-index fix for tooltip layering */
+    position: relative;
+    z-index: 1;
+}
+.chart-area { fill: url(#chart-gradient); }
+.chart-line { 
+    fill: none; 
+    stroke: var(--accent-blue); 
+    stroke-width: 2.5; 
+    stroke-linecap: round; 
+    stroke-linejoin: round;
+    /* VISUAL ENHANCEMENT: Adiciona um brilho sutil para fazer a linha se destacar. */
+    filter: drop-shadow(0 0 3px var(--accent-blue));
+}
+.chart-axis-labels {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin-block-start: var(--space-xs);
+}
+.chart-tooltip {
+    position: absolute;
+    top: 0;
+    left: 0;
+    /* UI REFINEMENT [2025-03-25]: Changed to a solid surface color as requested to ensure full opacity and legibility, removing all transparency. */
+    background-color: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-base);
+    padding: var(--space-sm) var(--space-md);
+    font-size: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--transition-duration);
+    will-change: transform, opacity;
+    z-index: var(--z-index-tooltip);
+    min-width: 150px;
+}
+.chart-tooltip.visible { opacity: 1; }
+.tooltip-date { font-weight: 600; margin-block-end: var(--space-sm); color: var(--text-primary); }
+.tooltip-score { margin-block-end: var(--space-sm); color: var(--text-secondary); }
+.tooltip-score-value { color: var(--accent-blue); font-weight: 700; }
+.tooltip-habits { list-style: none; padding: 0; margin: 0; font-size: 11px; color: var(--text-secondary); }
+.tooltip-habits li { white-space: nowrap; }
+.chart-indicator {
+    position: absolute; top: 0; height: 100%; width: 1px;
+    background-color: var(--accent-blue); pointer-events: none; opacity: 0;
+}
+.chart-indicator-dot {
+    position: absolute; width: 9px; height: 9px;
+    border-radius: var(--border-radius-pill); background-color: var(--accent-blue);
+    border: 2px solid var(--bg-color); transform: translate(-50%, -50%);
+}
+.chart-empty-state {
+    display: flex; align-items: center; justify-content: center;
+    height: 42px; color: var(--text-tertiary); font-style: italic; text-align: center;
+}
+.chart-evolution-indicator {
+    position: absolute;
+    font-size: 13px;
+    font-weight: 700;
+    background-color: transparent;
+    border: none;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+    white-space: nowrap;
+    transition: color var(--transition-duration-slow);
+    transform: translateY(calc(-100% - var(--space-lg)));
+}
+.chart-evolution-indicator.positive { color: var(--accent-green); }
+.chart-evolution-indicator.negative { color: var(--color-red); }
+.chart-evolution-indicator.positive::before { content: '▲ '; }
+.chart-evolution-indicator.negative::before { content: '▼ '; }
+
+/* --- MODAIS --- */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: var(--z-index-modal-overlay);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity var(--transition-duration-slow), visibility var(--transition-duration-slow);
+    /* UX: Evita scroll chaining */
+    overscroll-behavior: contain;
+}
+.modal-overlay.visible { opacity: 1; visibility: visible; }
+
+.modal-content {
+    background: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--space-lg);
+    width: 90%;
+    max-width: 400px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    padding: var(--space-xl);
+    overflow-y: auto;
+    z-index: var(--z-index-modal-content);
+    /* UX: Evita scroll chaining */
+    overscroll-behavior: contain;
+}
+#edit-habit-modal .modal-content {
+    background-color: var(--bg-color);
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* REFINAMENTO DE ARQUITETURA [2024-12-05]: A estilização dos títulos dos modais foi refatorada. A propriedade 'padding' foi substituída por 'margin-bottom' para um controle de espaçamento mais limpo e previsível, eliminando espaçamentos duplos e simplificando as anulações de estilo. */
+:is(#explore-modal, #manage-modal, #ai-modal, #ai-options-modal, #confirm-modal, #notes-modal) h2,
+#edit-habit-modal h2,
+#icon-picker-modal h2,
+#color-picker-modal h2 {
+    font-size: 17px;
+    font-weight: 600;
+    text-align: center;
+    flex-shrink: 0;
+    margin: 0;
+    margin-block-end: var(--space-lg);
+}
+
+/* CORREÇÃO VISUAL: Adiciona preenchimento ao título do modal de edição para consistência. */
+#edit-habit-modal h2 {
+    padding-inline: var(--space-xl);
+    padding-block-start: var(--space-xl);
+}
+
+#icon-picker-modal .modal-header h2 {
+    padding: 0;
+    text-align: center;
+    flex: 1;
+    margin: 0; /* ANULAÇÃO: Remove a margem inferior herdada da regra geral do título do modal. */
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-xl) var(--space-xl) 0;
+    flex-shrink: 0;
+}
+#icon-picker-modal .modal-header::before {
+    content: '';
+    width: 36px;
+}
+#icon-picker-modal .modal-header .icon-btn {
+    width: 36px;
+    height: 36px;
+    font-size: 22px;
+    color: var(--text-secondary);
+}
+
+#change-color-from-picker-btn::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: var(--border-radius-pill);
+    background-color: transparent;
+    /* VISUAL UPDATE [2025-02-26]: Reduced glow effect size from 10px to 5px */
+    box-shadow: 0 0 5px var(--accent-blue);
+    opacity: 0;
+    animation: glow-pulse 2.5s infinite ease-in-out;
+    pointer-events: none;
+}
+
+.modal-content > .modal-close-btn { margin-block-start: var(--space-lg); width: 100%; padding: var(--space-md); }
+
+.modal-subtitle {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-block-start: var(--space-md);
+    margin-block-end: var(--space-lg);
+    text-align: center;
+}
+.modal-settings-section {
+    margin-block-end: var(--space-lg); padding-block-end: var(--space-lg);
+    border-block-end: 1px solid var(--border-color);
+    display: flex; flex-direction: column; gap: var(--space-lg);
+}
+
+.modal-actions {
+    display: flex;
+    gap: var(--space-md);
+    margin-block-start: var(--space-lg);
+    padding: var(--space-lg);
+    flex-shrink: 0;
+    border-top: 1px solid var(--border-color);
+}
+.modal-actions .btn {
+    flex-grow: 1;
+    padding: var(--space-md);
+    font-size: 15px;
+    font-weight: 600;
+}
+#edit-habit-modal .modal-actions {
+    margin-block-start: 0;
+}
+/* REATORAÇÃO DE CONSISTÊNCIA: Generaliza o estilo para botões secundários em modais (Cancelar, Editar) para um visual mais limpo e "sem bordas", unificando a aparência em toda a aplicação. */
+.modal-actions .btn:not(.btn--primary):not(.btn--danger) {
+    border-color: var(--surface-color);
+}
+.modal-actions .btn:not(.btn--primary):not(.btn--danger):hover {
+    background-color: var(--surface-hover);
+}
+
+
+/* Modal: Gerenciar Hábitos */
+#habit-list { list-style: none; margin-block-end: var(--space-lg); }
+#habit-list li.habit-list-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding-block: var(--space-md);
+}
+#habit-list li span { display: flex; align-items: center; gap: var(--space-md); }
+#habit-list li svg { width: 20px; height: 20px; flex-shrink: 0; }
+.habit-list-item.ended { opacity: 0.6; }
+.habit-list-item.graduated { opacity: 0.8; }
+.habit-list-actions { display: flex; gap: var(--space-sm); }
+/* MELHORIA DE MANUTENIBILIDADE [2024-10-29]: Agrupa estilos comuns para botões de ação na lista de hábitos usando :is() para reduzir a repetição de código. */
+.habit-list-actions :is(.end-habit-btn, .permanent-delete-habit-btn, .graduate-habit-btn, .edit-habit-btn) {
+    background: none; border: none; cursor: pointer; font-size: 20px;
+    display: flex; align-items: center; justify-content: center;
+    padding: var(--space-xs); border-radius: var(--border-radius-pill);
+    transition: background-color var(--transition-duration);
+}
+.habit-list-actions :is(.end-habit-btn, .permanent-delete-habit-btn, .graduate-habit-btn, .edit-habit-btn):hover {
+    background-color: var(--surface-hover);
+}
+.end-habit-btn, .edit-habit-btn { color: var(--text-secondary); }
+.permanent-delete-habit-btn { color: var(--color-red); }
+.graduate-habit-btn { color: var(--color-yellow); }
+
+/* CORREÇÃO VISUAL [2024-12-21]: Adiciona estilo para o status de hábito (Encerrado/Graduado) no modal de gerenciamento. Este elemento era renderizado mas não estilizado, tornando-o visualmente inconsistente. */
+.habit-name-status {
+    font-size: 11px;
+    font-style: italic;
+    color: var(--text-tertiary);
+    margin-inline-start: var(--space-md);
+    flex-shrink: 0; /* Previne quebras de linha indesejadas */
+}
+
+.empty-list-message {
+    font-size: 13px;
+    color: var(--text-tertiary);
+    text-align: center;
+    font-style: italic;
+    padding: var(--space-lg) 0;
+    margin-top: var(--space-lg);
+    border-top: 1px solid var(--border-color);
+}
+
+.setting-item { display: flex; justify-content: space-between; align-items: center; }
+.setting-item-header { display: flex; justify-content: space-between; align-items: baseline; width: 100%; margin-block-end: var(--space-sm); }
+.setting-item.setting-item--column { flex-direction: column; align-items: stretch; gap: var(--space-sm); }
+.setting-item label { font-size: 14px; color: var(--text-secondary); }
+/* STYLE UPDATE: Aligned to match sync status style for consistency */
+.setting-item-desc {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-style: italic;
+    line-height: 1.5;
+    text-align: right;
+    width: 100%;
+    margin-top: var(--space-xs);
+}
+#notification-restart-notice {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-style: italic;
+    margin-inline-start: var(--space-sm);
+}
+
+/* Seção de Status de Notificação e Interruptor (Toggle) */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+}
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+.slider {
+    position: absolute;
+    cursor: pointer;
+    inset: 0;
+    background-color: var(--surface-hover);
+    border-radius: 34px;
+    transition: background-color var(--transition-duration);
+}
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 20px;
+    width: 20px;
+    left: 2px;
+    bottom: 2px;
+    background-color: white;
+    border-radius: var(--border-radius-pill);
+    transition: transform var(--transition-duration);
+}
+input:checked + .slider {
+    background-color: var(--accent-green);
+}
+input:checked + .slider:before {
+    transform: translateX(20px);
+}
+input:disabled + .slider {
+    cursor: not-allowed;
+    background-color: var(--surface-snoozed);
+}
+
+/* Modal: Sincronização */
+#sync-section {
+    background: var(--bg-color); border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-base); padding: var(--space-lg);
+}
+.sync-view { display: flex; flex-direction: column; gap: var(--space-md); }
+.sync-view p { font-size: 13px; line-height: 1.5; color: var(--text-secondary); text-align: center; }
+.sync-actions { display: flex; gap: var(--space-md); justify-content: center; }
+.sync-actions .btn { flex-grow: 1; }
+.sync-key-display {
+    background-color: var(--bg-color); border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-small); padding: var(--space-sm) var(--space-md);
+    display: flex; align-items: center; justify-content: space-between; gap: var(--space-md);
+}
+#sync-key-text {
+    font-family: monospace; font-size: 14px; color: var(--text-primary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#copy-key-btn { width: 32px; height: 32px; }
+.sync-warning { color: var(--color-yellow) !important; font-weight: 500; }
+#sync-status {
+    font-size: 11px; color: var(--text-tertiary); font-style: italic;
+    transition: opacity var(--transition-duration-slow); text-align: right;
+}
+
+/* Modal: Explorar Hábitos */
+/* MANUTENIBILIDADE [2024-12-06]: Remove a declaração de 'padding' redundante. Este valor já é herdado da regra '.modal-content'. */
+#explore-modal .modal-content {
+    width: 96vw;
+    max-width: 96vw;
+}
+#explore-habit-list {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-sm);
+    overflow-y: auto;
+    margin-block-end: var(--space-lg);
+    /* UX: Evita scroll chaining */
+    overscroll-behavior: contain;
+    /* PERFORMANCE [2025-01-17]: Otimização de renderização para listas longas em modais. */
+    content-visibility: auto;
+    contain-intrinsic-size: 100px 500px;
+}
+.explore-habit-item {
+    display: flex; flex-direction: column; align-items: center;
+    text-align: center; gap: var(--space-sm); padding: var(--space-sm) 2px;
+    background-color: var(--bg-color); border-radius: var(--border-radius-large);
+    cursor: pointer;
+    transition: background-color var(--transition-duration), opacity var(--transition-duration);
+}
+.explore-habit-item:hover { background-color: var(--surface-hover); }
+.explore-habit-item.disabled { opacity: 0.5; pointer-events: none; cursor: default; }
+.explore-habit-item.disabled:hover { background-color: var(--bg-color); }
+.explore-habit-icon {
+    font-size: 24px; width: 38px; height: 38px; flex-shrink: 0;
+    display: flex; align-items: center;
+    justify-content: center;
+    background-color: var(--surface-color); border-radius: var(--border-radius-base);
+    margin-block-end: 2px;
+}
+.explore-habit-icon svg { width: 60%; height: 60%; }
+.explore-habit-details .name { font-size: 10px; font-weight: 600; line-height: 1.2; }
+.explore-habit-details .subtitle { display: none; }
+#create-custom-habit-btn { width: 100%; padding: var(--space-md); }
+
+/* Modal: Resposta da IA e Confirmação */
+#ai-response { margin-block-end: var(--space-lg); max-height: 300px; overflow-y: auto; color: var(--text-secondary); line-height: 1.6; overscroll-behavior: contain; }
+#ai-response strong { color: var(--text-primary); font-weight: 600; }
+#ai-response p { margin-block-end: var(--space-sm); }
+#ai-response p:last-child { margin-block-end: 0; }
+#ai-response ul { list-style: none; padding-inline-start: 0; margin-block-start: var(--space-sm); }
+#ai-response li { margin-block-end: var(--space-sm); display: flex; align-items: center; gap: var(--space-sm); }
+#ai-response li svg { width: 20px; height: 20px; flex-shrink: 0; }
+#confirm-modal-text { color: var(--text-secondary); line-height: 1.6; margin-block-end: var(--space-sm); }
+
+/* Modal: Opções da IA */
+#ai-options-modal .modal-content { gap: var(--space-section); }
+.ai-options-list { display: flex; flex-direction: column; gap: var(--space-md); }
+.ai-option-btn {
+    display: flex; flex-direction: column; align-items: flex-start;
+    padding: var(--space-lg); border: 1px solid var(--border-color);
+    background-color: var(--surface-color); border-radius: var(--border-radius-large);
+    text-align: left; cursor: pointer;
+    transition: background-color var(--transition-duration), border-color var(--transition-duration);
+    width: 100%;
+}
+.ai-option-btn:hover { background-color: var(--surface-hover); border-color: var(--text-tertiary); }
+.ai-option-title { font-size: 16px; font-weight: 600; color: var(--text-primary); margin-block-end: var(--space-xs); }
+.ai-option-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.4; }
+
+/* Modal: Notas */
+#notes-modal .modal-content { gap: var(--space-lg); }
+#notes-modal h2, #notes-modal p { margin: 0; text-align: center; }
+#notes-modal-subtitle { color: var(--text-tertiary); }
+#notes-textarea {
+    background: var(--bg-color); border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-base); padding: var(--space-md); color: var(--text-primary);
+    font-size: 14px; resize: vertical; width: 100%; min-height: 100px;
+}
+
+/* Modal: Seletor de Ícones */
+#icon-picker-modal .modal-content {
+    max-width: 480px;
+    padding: 0;
+}
+
+/* FIX [2025-02-26]: Move spacing from scrollable grid to fixed header to preserve margin during scroll */
+#icon-picker-modal .modal-header {
+    padding-bottom: var(--space-xl);
+    position: relative; /* Ensure z-index works if needed */
+    z-index: 2; 
+    background-color: var(--surface-color); /* Ensure opaque background if scrolling happens near */
+    /* However, since they are flex siblings, grid shouldn't scroll behind header unless negative margin.
+       But adding z-index/bg is safe practice. */
+}
+
+#icon-picker-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+    gap: var(--space-md);
+    max-height: 300px;
+    overflow-y: auto;
+    
+    /* UX FIX [2025-02-26]: Padding adjusted to move top spacing to header */
+    padding: 4px var(--space-xl) var(--space-xl); 
+    
+    --current-habit-bg-color: #000000;
+    --current-habit-fg-color: #e5e5e5;
+    /* UX: Evita scroll chaining */
+    overscroll-behavior: contain;
+    /* PERFORMANCE [2025-01-17]: Otimização de renderização para grids de ícones. */
+    content-visibility: auto;
+    contain-intrinsic-size: 100px 300px;
+}
+.icon-picker-item {
+    width: 100%;
+    aspect-ratio: 1/1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--border-radius-base);
+    cursor: pointer;
+    border: 2px solid transparent;
+    background-color: var(--current-habit-bg-color);
+    color: var(--current-habit-fg-color);
+    transition: transform var(--transition-duration-fast), filter var(--transition-duration);
+}
+.icon-picker-item:hover {
+    filter: brightness(1.2);
+    transform: scale(1.05);
+}
+.icon-picker-item svg {
+    width: 60%;
+    height: 60%;
+    pointer-events: none;
+}
+#icon-picker-modal.is-picking-color .icon-picker-item {
+    background-color: #000000;
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+#icon-picker-modal.is-picking-color .icon-picker-item:hover {
+    background-color: var(--surface-hover);
+    border-color: var(--accent-blue);
+    filter: brightness(1);
+}
+
+
+/* Modal: Seletor de Cores */
+/* MANUTENIBILIDADE [2024-12-06]: Remove a declaração de 'padding' redundante. Este valor já é herdado da regra '.modal-content'. */
+#color-picker-modal .modal-content {
+    max-width: 480px;
+    gap: var(--space-lg);
+}
+#color-picker-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+    gap: var(--space-md);
+    max-height: 300px;
+    overflow-y: auto;
+    padding: var(--space-sm);
+    /* UX: Evita scroll chaining */
+    overscroll-behavior: contain;
+}
+.color-swatch {
+    width: 100%;
+    aspect-ratio: 1/1;
+    border-radius: var(--border-radius-pill);
+    cursor: pointer;
+    border: 4px solid transparent;
+    transition: all var(--transition-duration-fast);
+    padding: 0;
+    box-shadow: 0 0 0 1px var(--border-color) inset;
+}
+.color-swatch:hover {
+    transform: scale(1.1);
+}
+.color-swatch.selected {
+    border-color: var(--text-primary);
+    box-shadow: 0 0 0 1px var(--border-color) inset, 0 0 8px var(--accent-blue);
+}
+
+
+/* Modal: Edição/Criação de Hábito */
+#edit-habit-modal .modal-content { max-width: 540px; }
+
+
+/* CORREÇÃO: Garante que o modal de confirmação apareça sobre outros modais */
+#confirm-modal, #icon-picker-modal, #color-picker-modal, #full-calendar-modal, #calendar-quick-actions {
+    z-index: var(--z-index-stacked-modal);
+}
+
+/* Modal: Ações Rápidas do Calendário */
+#calendar-quick-actions {
+    background: rgba(0,0,0,0.4);
+    /* PERFORMANCE: Filtro de desfoque é custoso; usar com moderação. */
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    align-items: flex-start;
+    justify-content: flex-start;
+}
+
+.quick-actions-content {
+    position: absolute;
+    top: var(--actions-top, 50%);
+    left: var(--actions-left, 50%);
+    transform: translate(var(--translate-x, -50%), 0) scale(0.95);
+    /* UI REFACTOR: Container is now a single visual block */
+    background: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-large);
+    overflow: hidden; /* Important for containing the button hover states */
+    padding: 0;
+    gap: 0;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    opacity: 0;
+    transition: opacity var(--transition-duration-fast), transform var(--transition-duration-fast) cubic-bezier(0.34, 1.56, 0.64, 1);
+    width: max-content;
+}
+
+#calendar-quick-actions.visible .quick-actions-content {
+    opacity: 1;
+    transform: translate(var(--translate-x, -50%), 0) scale(1);
+}
+
+.quick-action-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-md) var(--space-lg);
+    /* UI REFACTOR: Button is now transparent with no border or radius */
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    color: var(--text-primary);
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+    width: 100%;
+    transition: background-color var(--transition-duration-fast);
+}
+.quick-action-btn:hover {
+    background-color: var(--surface-hover);
+    color: var(--text-primary);
+}
+.quick-action-btn:active {
+    transform: none;
+}
+.quick-action-btn svg {
+    width: 20px;
+    height: 20px;
+    stroke: currentColor;
+    flex-shrink: 0;
+}
+
+.quick-action-divider {
+    /* UI REFACTOR: Make the divider visible as a subtle line */
+    display: block;
+    height: 1px;
+    background-color: var(--border-color);
+    margin-inline: var(--space-lg); /* Align with button text padding */
+    margin-block: 0; /* Let button padding handle vertical space */
+}
+
+/* Modal: Calendário Completo */
+#full-calendar-modal .modal-content {
+    max-width: 500px;
+    gap: var(--space-lg);
+}
+#full-calendar-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-inline: var(--space-md);
+}
+#full-calendar-header h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+}
+#full-calendar-weekdays {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: var(--space-sm);
+    text-align: center;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+#full-calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: var(--space-sm);
+}
+.full-calendar-day {
+    aspect-ratio: 1/1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    border-radius: var(--border-radius-pill);
+    transition: background-color var(--transition-duration);
+    position: relative;
+}
+.full-calendar-day:hover {
+    background-color: var(--surface-hover);
+}
+.full-calendar-day.other-month {
+    color: var(--text-tertiary);
+    pointer-events: none;
+}
+.full-calendar-day.selected .day-number {
+    font-size: 1.3em;
+    font-weight: 700;
+}
+.full-calendar-day.today .day-number {
+    font-weight: 700;
+}
+.full-calendar-day.today .day-progress-ring::after {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: var(--border-radius-pill);
+    box-shadow: 0 0 10px var(--accent-green);
+    animation: glow-pulse 2.5s infinite ease-in-out;
+}
+
+
+/* --- COMPONENTES: FORMULÁRIOS --- */
+.form-group { margin-block-end: var(--space-lg); }
+.form-group label {
+    display: block; color: var(--text-secondary);
+    font-size: 14px; font-weight: 500; margin-block-end: var(--space-sm);
+}
+.form-control {
+    width: 100%; background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-base);
+    padding: var(--space-md); color: var(--text-primary);
+    font-size: 15px; height: 44px;
+}
+#edit-habit-modal #habit-name {
+    height: 48px;
+    font-size: 18px;
+    font-weight: 500;
+    margin-top: 8px; /* Centraliza verticalmente com o ícone de 64px */
+}
+#edit-habit-modal #habit-name:focus {
+    outline: none;
+    box-shadow: none;
+    border-color: var(--accent-blue);
+}
+#edit-habit-modal #habit-name::placeholder {
+    color: var(--text-tertiary);
+}
+
+
+/* --- FORMULÁRIO DE HÁBITO ESTILO APPLE --- */
+#edit-habit-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-lg);
+    /* O preenchimento superior foi movido para o h2 para um espaçamento consistente. */
+    padding: 0 var(--space-xl) var(--space-xxl);
+    flex-grow: 1;
+    /* overflow-y: auto; REATORAÇÃO DE LAYOUT: Removido scroll aninhado. O scroll do formulário agora é gerenciado pelo .modal-content pai para evitar bugs de renderização em mobile. */
+}
+.form-section {
+    background-color: var(--surface-color);
+    border-radius: var(--border-radius-large);
+}
+.form-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-md) var(--space-lg);
+    border-bottom: 1px solid var(--border-color);
+}
+.form-section .form-row:last-child {
+    border-bottom: none;
+}
+.form-row label {
+    font-size: 16px;
+    font-weight: 400;
+    color: var(--text-primary);
+}
+.form-row-content {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    color: var(--text-secondary);
+}
+.form-row-content .chevron {
+    stroke: var(--text-tertiary);
+    width: 16px;
+    height: 16px;
+}
+.form-row--vertical {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-lg);
+}
+
+/* Seção de Identidade do Hábito (Ícone, Nome, Cor) */
+.habit-identity-section {
+    display: flex;
+    align-items: flex-start; /* Evita pulo do ícone quando avisos aparecem */
+    gap: var(--space-lg);
+    background-color: transparent;
+}
+.habit-icon-picker-wrapper {
+    position: relative;
+    flex-shrink: 0;
+}
+.edit-icon-overlay {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 24px;
+    height: 24px;
+    background-color: var(--surface-hover);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    border: 2px solid var(--bg-color);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.edit-icon-overlay svg {
+    width: 14px;
+    height: 14px;
+    stroke: var(--text-primary);
+}
+
+.habit-icon-picker-btn {
+    width: 64px;
+    height: 64px;
+    border-radius: var(--border-radius-pill);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    cursor: pointer;
+    transition: transform var(--transition-duration-fast), background-color var(--transition-duration), color var(--transition-duration);
+}
+.habit-icon-picker-btn:hover {
+    transform: scale(1.1);
+}
+.habit-icon-picker-btn svg {
+    width: 55%;
+    height: 55%;
+    pointer-events: none;
+}
+.habit-name-input-wrapper {
+    flex: 1;
+}
+#habit-name {
+    flex-grow: 1;
+}
+
+
+/* Controle Segmentado (Estilo Apple) */
+.segmented-control {
+    display: flex;
+    background-color: var(--bg-color);
+    border-radius: var(--border-radius-base);
+    padding: 4px; /* Increased padding for larger gray background */
+    width: 100%;
+    gap: 4px; /* Spacing between options */
+}
+.segmented-control-option {
+    flex: 1;
+    padding: 10px 0; /* Taller touch target */
+    font-size: 12px; /* Smaller text */
+    font-weight: 500;
+    color: var(--text-secondary);
+    background-color: transparent;
+    border: none;
+    border-radius: var(--border-radius-small);
+    cursor: pointer;
+    transition: background-color var(--transition-duration), color var(--transition-duration), transform 0.1s;
+    display: flex;
+    flex-direction: column; /* Vertical stack for minimalism and space saving */
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+.segmented-control-option.selected {
+    background-color: var(--accent-blue);
+    color: white;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.segmented-control-option:active {
+    transform: scale(0.98);
+}
+.segmented-control-option svg {
+    width: 20px;
+    height: 20px;
+    stroke: currentColor;
+}
+
+/* Picker de Dias da Semana (Estilo Moderno de Botão de Alternância) */
+.weekday-picker {
+    display: flex;
+    justify-content: space-between; 
+    gap: 2px; /* Reduced gap to prevent overflow */
+    padding-top: 0;
+}
+
+.weekday-picker label {
+    cursor: pointer;
+    flex: 1;
+    display: flex;
+    justify-content: center;
+}
+
+.weekday-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px; /* Reduced size from 32px to 28px */
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color); /* Thinner, subtler border */
+    background-color: var(--surface-color); /* Explicit background */
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 11px; /* Smaller font */
+    transition: all 0.2s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.weekday-picker label:hover .weekday-button {
+    background-color: var(--surface-hover);
+    border-color: var(--text-tertiary);
+}
+
+.weekday-picker input[type="checkbox"]:checked + .weekday-button {
+    background-color: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: white;
+}
+
+/* A11Y: Estado de foco visível para checkbox de dia da semana */
+.weekday-picker input[type="checkbox"]:focus-visible + .weekday-button {
+    box-shadow: 0 0 0 2px var(--bg-color), 0 0 0 4px var(--accent-blue);
+}
+
+
+/* Opções de Frequência (Estilo Rádio) */
+.frequency-options .form-row label {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    cursor: pointer;
+}
+.frequency-options input[type="radio"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 22px;
+    height: 22px;
+    border: 2px solid var(--text-tertiary);
+    border-radius: 50%;
+    margin-right: var(--space-md);
+    position: relative;
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+.frequency-options input[type="radio"]:checked {
+    border-color: var(--accent-blue);
+}
+.frequency-options input[type="radio"]:checked::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 12px;
+    height: 12px;
+    background-color: var(--accent-blue);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+}
+
+/* A11Y: Estado de foco visível para botões de rádio customizados */
+.frequency-options input[type="radio"]:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+}
+
+.interval-control-group {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    background-color: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-base);
+    padding: var(--space-xs);
+}
+
+.stepper-btn {
+    background: var(--surface-color);
+    border: none;
+    color: var(--text-primary);
+    font-size: 20px;
+    font-weight: 500;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--border-radius-small);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color var(--transition-duration);
+}
+.stepper-btn:hover {
+    background-color: var(--surface-hover);
+}
+
+.interval-amount-display {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--text-primary);
+    min-width: 24px;
+    text-align: center;
+}
+
+.unit-toggle-btn {
+    background: var(--surface-color);
+    border: none;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 500;
+    padding: 0 var(--space-md);
+    height: 32px;
+    border-radius: var(--border-radius-small);
+    cursor: pointer;
+    transition: background-color var(--transition-duration);
+    min-width: 80px;
+}
+.unit-toggle-btn:hover {
+    background-color: var(--surface-hover);
+}
+
+
+/* Esconde as opções de frequência detalhadas */
+.frequency-details {
+    display: none;
+    padding: var(--space-md); /* Changed from --space-lg */
+    background-color: var(--bg-color); /* Gray background */
+    border-radius: var(--border-radius-base);
+    margin-top: var(--space-sm);
+    border: 1px solid var(--border-color); /* Added border */
+}
+.frequency-details.visible {
+    display: block;
+}
+
+
+/* --- UTILITÁRIOS --- */
+.form-notice {
+    color: var(--color-red); font-size: 13px; font-weight: 500;
+    opacity: 0; max-height: 0;
+    overflow: hidden;
+    transition: opacity var(--transition-duration-slow), max-height var(--transition-duration-slow), padding-block var(--transition-duration-slow);
+    text-align: left; /* Alinhado à esquerda conforme solicitação */
+    padding: 0; margin-block-start: var(--space-xs);
+}
+.form-notice.visible {
+    opacity: 1;
+    max-height: 80px;
+    padding-block: var(--space-sm);
+}
+
+/* --- PWA: OFFLINE INDICATOR --- */
+body.is-offline #ai-eval-btn .default-icon,
+body.is-offline #ai-eval-btn .loading-icon {
+    display: none;
+}
+
+body.is-offline #ai-eval-btn .offline-icon {
+    display: block;
+}
+
+/* --- SCROLLBARS PERSONALIZADAS (MODAIS) --- */
+.modal-content,
+#explore-habit-list,
+#habit-list,
+#ai-response,
+#icon-picker-grid,
+#color-picker-grid,
+#edit-habit-form {
+    /* Firefox */
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--text-tertiary) 60%, transparent) transparent;
+}
+
+/* WebKit (Chrome, Safari, Edge) */
+.modal-content::-webkit-scrollbar,
+#explore-habit-list::-webkit-scrollbar,
+#habit-list::-webkit-scrollbar,
+#ai-response::-webkit-scrollbar,
+#icon-picker-grid::-webkit-scrollbar,
+#color-picker-grid::-webkit-scrollbar,
+#edit-habit-form::-webkit-scrollbar {
+    width: 6px;
+}
+
+.modal-content::-webkit-scrollbar-track,
+#explore-habit-list::-webkit-scrollbar-track,
+#habit-list::-webkit-scrollbar-track,
+#ai-response::-webkit-scrollbar-track,
+#icon-picker-grid::-webkit-scrollbar-track,
+#color-picker-grid::-webkit-scrollbar-track,
+#edit-habit-form::-webkit-scrollbar-track {
+    background: transparent;
+    /* CORREÇÃO: Adiciona margem vertical para que a barra não corte os cantos arredondados do modal. */
+    margin-block: var(--space-lg);
+}
+
+.modal-content::-webkit-scrollbar-thumb,
+#explore-habit-list::-webkit-scrollbar-thumb,
+#habit-list::-webkit-scrollbar-thumb,
+#ai-response::-webkit-scrollbar-thumb,
+#icon-picker-grid::-webkit-scrollbar-thumb,
+#color-picker-grid::-webkit-scrollbar-thumb,
+#edit-habit-form::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--text-tertiary) 60%, transparent);
+    border-radius: 3px;
+    /* Cria um efeito de "padding" ao redor do polegar, fazendo-o parecer mais fino */
+    border: 1px solid transparent;
+    background-clip: content-box;
+}
+
+.modal-content::-webkit-scrollbar-thumb:hover,
+#explore-habit-list::-webkit-scrollbar-thumb:hover,
+#habit-list::-webkit-scrollbar-thumb:hover,
+#ai-response::-webkit-scrollbar-thumb:hover,
+#icon-picker-grid::-webkit-scrollbar-thumb:hover,
+#color-picker-grid::-webkit-scrollbar-thumb:hover,
+#edit-habit-form::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in srgb, var(--text-tertiary) 90%, transparent);
+}
+
+/* --- RESPONSIVIDADE --- */
+@media (max-width: 767px) {
+    .app-header {
+        gap: var(--space-sm);
+    }
+    .app-header h2 { font-size: 24px; }
+    /* FIX: Match subtitle size to quote size on mobile for consistency */
+    .stoic-quote, .app-subtitle { font-size: 12px; }
+    .header-top { gap: var(--space-md); }
+    #fab-add-habit { width: 38px; height: 38px; font-size: 22px; }
+    .header-bottom { gap: var(--space-sm); flex-wrap: nowrap; }
+
+    /* REATORAÇÃO [2024-11-19]: Adiciona regras para mostrar o formato de data mobile e ocultar o de desktop. */
+    .header-title-desktop {
+        display: none;
+    }
+    .header-title-mobile {
+        display: block;
+    }
+    
+    /* REFINAMENTO DE UX [2024-11-22]: Reduz o espaçamento vertical entre a lista de hábitos e o gráfico em telas menores para uma visualização mais compacta. */
+    #habit-container > .habit-group-wrapper:last-of-type.has-habits {
+        margin-block-end: var(--space-xxl); /* Original era --space-3xl */
+    }
+}
+
+@media (min-width: 768px) {
+    .app-container { padding-inline: var(--space-xl); }
+    .app-header { padding-block: calc(var(--space-lg) * 2); margin-block-end: 0; }
+    .app-header h2 { font-size: 32px; }
+
+    .habit-group {
+        display: flex; flex-wrap: wrap;
+        gap: var(--space-sm); padding: 0;
+        
+        /* UI FIX [2025-02-23]: Allow flex children to grow properly inside the timeline layout */
+        flex-grow: 1;
+        min-width: 0;
+    }
+    .habit-card {
+        flex: 1 1 calc(50% - var(--space-sm));
+        margin-block-end: 0;
+        min-width: 150px;
+    }
+    .empty-group-placeholder { width: 100%; }
+
+    .habit-content-wrapper { 
+        padding: var(--space-xs) var(--space-md) var(--space-xs) var(--space-xl); 
+    }
+    /* Adjusted text size for desktop from 19px to 17px */
+    .habit-details .name { font-size: 17px; }
+    .habit-details .subtitle { font-size: 12px; }
+
+    .modal-content { max-width: 500px; padding: var(--space-xl); }
+
+    #explore-modal .modal-content { max-width: 90vw; max-height: 90vh; width: auto; }
+    #explore-habit-list { grid-template-columns: repeat(6, 1fr); gap: var(--space-md); }
+    .explore-habit-item { padding: var(--space-lg) var(--space-sm); }
+    .explore-habit-icon { width: 44px; height: 44px; margin-block-end: var(--space-xs); }
+    .explore-habit-details .name { font-size: 14px; }
+    .explore-habit-details .subtitle {
+        display: block; font-size: 11px;
+        color: var(--text-tertiary); line-height: 1.3;
+    }
+}
